@@ -1,59 +1,151 @@
-const fs = require('fs');
-const axios = require('axios');
+// Client-side file encryption utilities for browser environment
+import axios from 'axios';
+import { ab2str, str2ab } from './crypto';
 
-async function uploadEncryptedFile(secureClient, filePath) {
-    // 1. Read File
-    const fileBuffer = fs.readFileSync(filePath);
-
-    // 2. Encrypt File Content (AES-256-GCM) [cite: 60]
-    // Note: For large files, use Streams. For MVP/Report, Buffer is fine.
-    const iv = crypto.randomBytes(12);
-    const cipher = crypto.createCipheriv('aes-256-gcm', secureClient.sessionKey, iv);
+/**
+ * Encrypt a file using AES-256-GCM with the session key
+ * @param {CryptoKey} sessionKey - The derived session key
+ * @param {File} file - The file object to encrypt
+ * @returns {Object} - Encrypted data with iv, authTag, and encrypted blob
+ */
+export const encryptFile = async (sessionKey, file) => {
+  try {
+    // Read file as ArrayBuffer
+    const fileBuffer = await file.arrayBuffer();
     
-    const encryptedBuffer = Buffer.concat([
-        cipher.update(fileBuffer),
-        cipher.final()
-    ]);
-    const authTag = cipher.getAuthTag();
+    // Generate random IV (12 bytes for GCM)
+    const iv = window.crypto.getRandomValues(new Uint8Array(12));
+    
+    // Encrypt the file content
+    const encryptedData = await window.crypto.subtle.encrypt(
+      {
+        name: 'AES-GCM',
+        iv: iv,
+        tagLength: 128 // 16 bytes authentication tag
+      },
+      sessionKey,
+      fileBuffer
+    );
+    
+    // Split encrypted data and auth tag
+    // In Web Crypto API, the auth tag is appended to the ciphertext
+    const encryptedArray = new Uint8Array(encryptedData);
+    const ciphertext = encryptedArray.slice(0, -16);
+    const authTag = encryptedArray.slice(-16);
+    
+    return {
+      ciphertext,
+      iv,
+      authTag,
+      originalName: file.name,
+      mimeType: file.type,
+      size: file.size
+    };
+  } catch (error) {
+    console.error('File encryption error:', error);
+    throw new Error('Failed to encrypt file');
+  }
+};
 
-    // 3. Pack Payload
-    // We append IV and AuthTag to the file start so we can decrypt later
-    // Format: [IV (12b)] [AuthTag (16b)] [EncryptedData]
-    const finalPayload = Buffer.concat([iv, authTag, encryptedBuffer]);
-
-    // 4. Upload
+/**
+ * Upload encrypted file to server
+ * @param {Object} encryptedFile - Encrypted file data
+ * @param {string} sender - Sender username
+ * @param {string} recipient - Recipient username
+ * @returns {Object} - Upload response
+ */
+export const uploadEncryptedFile = async (encryptedFile, sender, recipient) => {
+  try {
     const formData = new FormData();
-    // In Node env, FormData requires headers. In browser, it's automatic.
-    // Assuming browser-like environment for React:
-    const blob = new Blob([finalPayload]); 
-    formData.append('encryptedFile', blob, 'secret_doc.pdf.enc');
-
-    await axios.post('https://localhost:443/api/files/upload', formData);
-    console.log("Encrypted file uploaded.");
-}
-
-async function downloadAndDecryptFile(secureClient, fileId) {
-    // 1. Download
-    const response = await axios.get(`https://localhost:443/api/files/download/${fileId}`, {
-        responseType: 'arraybuffer'
-    });
-    const rawData = Buffer.from(response.data);
-
-    // 2. Extract IV, Tag, and Ciphertext
-    const iv = rawData.slice(0, 12);
-    const authTag = rawData.slice(12, 28);
-    const ciphertext = rawData.slice(28);
-
-    // 3. Decrypt
-    const decipher = crypto.createDecipheriv('aes-256-gcm', secureClient.sessionKey, iv);
-    decipher.setAuthTag(authTag);
     
-    const decrypted = Buffer.concat([
-        decipher.update(ciphertext),
-        decipher.final()
-    ]);
+    // Create a blob from the encrypted ciphertext
+    const blob = new Blob([encryptedFile.ciphertext], { type: 'application/octet-stream' });
+    formData.append('encryptedFile', blob, `${Date.now()}.enc`);
+    
+    // Add metadata
+    formData.append('sender', sender);
+    formData.append('recipient', recipient);
+    formData.append('filename', encryptedFile.originalName);
+    formData.append('iv', ab2str(encryptedFile.iv));
+    formData.append('authTag', ab2str(encryptedFile.authTag));
+    formData.append('mimeType', encryptedFile.mimeType || 'application/octet-stream');
+    
+    const response = await axios.post('https://localhost:443/api/files/upload', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data'
+      }
+    });
+    
+    return response.data;
+  } catch (error) {
+    console.error('File upload error:', error);
+    throw new Error('Failed to upload file');
+  }
+};
 
-    // 4. Save/View
-    fs.writeFileSync('decrypted_file_output.pdf', decrypted);
-    console.log("File decrypted locally.");
-}
+/**
+ * Download and decrypt file from server
+ * @param {CryptoKey} sessionKey - The derived session key
+ * @param {string} fileId - The file ID to download
+ * @returns {Object} - Decrypted file data
+ */
+export const downloadAndDecryptFile = async (sessionKey, fileId) => {
+  try {
+    // First, get file metadata
+    const metadataResponse = await axios.get(`https://localhost:443/api/files/metadata/${fileId}`);
+    const metadata = metadataResponse.data;
+    
+    // Then download encrypted file
+    const fileResponse = await axios.get(`https://localhost:443/api/files/download/${fileId}`, {
+      responseType: 'arraybuffer'
+    });
+    
+    // Convert metadata from base64
+    const iv = str2ab(metadata.iv);
+    const authTag = str2ab(metadata.authTag);
+    
+    // Combine ciphertext and authTag for decryption
+    const ciphertext = new Uint8Array(fileResponse.data);
+    const encryptedData = new Uint8Array(ciphertext.length + authTag.byteLength);
+    encryptedData.set(ciphertext, 0);
+    encryptedData.set(new Uint8Array(authTag), ciphertext.length);
+    
+    // Decrypt the file
+    const decryptedData = await window.crypto.subtle.decrypt(
+      {
+        name: 'AES-GCM',
+        iv: new Uint8Array(iv),
+        tagLength: 128
+      },
+      sessionKey,
+      encryptedData
+    );
+    
+    return {
+      data: decryptedData,
+      filename: metadata.filename,
+      mimeType: metadata.mimeType || 'application/octet-stream'
+    };
+  } catch (error) {
+    console.error('File decryption error:', error);
+    throw new Error('Failed to decrypt file');
+  }
+};
+
+/**
+ * Download decrypted file to user's computer
+ * @param {ArrayBuffer} data - Decrypted file data
+ * @param {string} filename - Original filename
+ * @param {string} mimeType - MIME type
+ */
+export const downloadFile = (data, filename, mimeType) => {
+  const blob = new Blob([data], { type: mimeType });
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  window.URL.revokeObjectURL(url);
+};

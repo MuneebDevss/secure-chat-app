@@ -6,6 +6,9 @@ import {
   generateEphemeralKeyPair, exportKeyToRaw, signData, 
   verifySignature, deriveSessionKey, encryptMessage, decryptMessage
 } from '../utils/crypto';
+import { 
+  encryptFile, uploadEncryptedFile, downloadAndDecryptFile, downloadFile 
+} from '../utils/uploadFile';
 
 const socket = io('https://localhost:443');
 
@@ -14,12 +17,14 @@ const Chat = ({ username, onLogout }) => {
   const [messages, setMessages] = useState([]);
   const [inputText, setInputText] = useState('');
   const [status, setStatus] = useState('idle');
+  const [uploadProgress, setUploadProgress] = useState(null);
   
   // SECURE STATE
   const identityPrivateKey = useRef(null);
   const sessionKey = useRef(null); 
   const ephemeralKeyPair = useRef(null);
   const messagesEndRef = useRef(null);
+  const fileInputRef = useRef(null);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -175,11 +180,32 @@ const Chat = ({ username, onLogout }) => {
       }
     });
 
+    // SOCKET LISTENER FOR NEW FILES
+    socket.on('new-file', (data) => {
+      console.log('Received new-file event:', data);
+      if (sessionKey.current) {
+        // Set target user if not already set (for Bob receiving files)
+        if (!targetUser && data.from) {
+          setTargetUser(data.from);
+        }
+        setMessages(prev => [...prev, {
+          from: data.from,
+          text: `📎 Received file: ${data.filename} (${(data.size / 1024).toFixed(2)} KB)`,
+          timestamp: Date.now(),
+          isFile: true,
+          fileId: data.fileId
+        }]);
+      } else {
+        console.log('Session key not available, file notification ignored');
+      }
+    });
+
     return () => {
       socket.off('signal');
       socket.off('new-message');
+      socket.off('new-file');
     };
-  }, [username, handleIncomingHandshake, handleHandshakeResponse, fetchMessages]);
+  }, [username, handleIncomingHandshake, handleHandshakeResponse, fetchMessages, targetUser]);
 
   // --- STEP 1: START HANDSHAKE (ALICE) ---
   const startSecureChat = async () => {
@@ -262,7 +288,75 @@ const Chat = ({ username, onLogout }) => {
     }
   };
 
-  const getStatusInfo = () => {
+  // --- FILE HANDLING ---
+  const handleFileSelect = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    if (!sessionKey.current) {
+      alert("⚠️ No secure connection! Start a handshake first.");
+      return;
+    }
+
+    if (status !== 'connected') {
+      alert("⚠️ Wait for secure connection to complete!");
+      return;
+    }
+
+    try {
+      setUploadProgress('Encrypting file...');
+      
+      // Encrypt file
+      const encryptedFile = await encryptFile(sessionKey.current, file);
+      
+      setUploadProgress('Uploading encrypted file...');
+      
+      // Upload to server
+      const response = await uploadEncryptedFile(encryptedFile, username, targetUser);
+      
+      setUploadProgress(null);
+      
+      // Add file message to UI
+      console.log('File uploaded successfully:', response);
+      setMessages(prev => [...prev, {
+        from: username,
+        text: `📎 Sent file: ${file.name} (${(file.size / 1024).toFixed(2)} KB)`,
+        timestamp: Date.now(),
+        isFile: true,
+        fileId: response.fileId
+      }]);
+      
+      // Reset file input
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+  } catch (error) {
+    console.error('File upload error:', error);
+    alert(`Failed to send file: ${error.message}`);
+    setUploadProgress(null);
+  }
+};  const handleFileDownload = async (fileId, filename) => {
+    if (!sessionKey.current) {
+      alert("⚠️ No secure connection!");
+      return;
+    }
+
+    try {
+      setUploadProgress('Downloading and decrypting file...');
+      
+      const decryptedFile = await downloadAndDecryptFile(sessionKey.current, fileId);
+      
+      // Trigger download
+      downloadFile(decryptedFile.data, decryptedFile.filename, decryptedFile.mimeType);
+      
+      setUploadProgress(null);
+  } catch (error) {
+    console.error('File download error:', error);
+    console.error('Error details:', error.response?.data || error.message);
+    alert(`Failed to download file: ${error.message}. It may be from a previous session.`);
+    setUploadProgress(null);
+  }
+};  const getStatusInfo = () => {
     switch(status) {
       case 'ready':
         return { text: 'Ready to connect', color: 'bg-gray-100 text-gray-700', icon: '⚪' };
@@ -415,6 +509,18 @@ const Chat = ({ username, onLogout }) => {
                         : 'bg-white text-gray-800 shadow-sm'
                     }`}>
                       <p className="break-words">{m.text}</p>
+                      {m.isFile && m.fileId && (
+                        <button
+                          onClick={() => handleFileDownload(m.fileId, m.text)}
+                          className={`mt-2 px-3 py-1 rounded-lg text-xs font-medium ${
+                            m.from === username
+                              ? 'bg-white/20 hover:bg-white/30 text-white'
+                              : 'bg-blue-100 hover:bg-blue-200 text-blue-700'
+                          }`}
+                        >
+                          ⬇️ Download
+                        </button>
+                      )}
                       <p className={`text-xs mt-1 ${m.from === username ? 'text-blue-100' : 'text-gray-500'}`}>
                         {new Date(m.timestamp).toLocaleTimeString()}
                       </p>
@@ -427,7 +533,32 @@ const Chat = ({ username, onLogout }) => {
 
             {/* Input */}
             <div className="border-t bg-white p-4">
+              {uploadProgress && (
+                <div className="mb-3 text-sm text-blue-600 flex items-center">
+                  <svg className="animate-spin -ml-1 mr-2 h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                  {uploadProgress}
+                </div>
+              )}
               <div className="flex space-x-2">
+                <input
+                  type="file"
+                  ref={fileInputRef}
+                  onChange={handleFileSelect}
+                  className="hidden"
+                />
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={status !== 'connected'}
+                  className="px-4 py-3 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-gray-500 disabled:opacity-50 disabled:cursor-not-allowed transition"
+                  title="Send encrypted file"
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
+                  </svg>
+                </button>
                 <input
                   type="text"
                   value={inputText}
