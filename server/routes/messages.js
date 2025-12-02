@@ -29,6 +29,15 @@ router.post('/send', async (req, res) => {
     await newMessage.save();
     logger('MSG_STORED', { sender, recipient, iv }); // Log metadata only [cite: 54]
     
+    // Notify recipient via socket
+    const io = req.app.get('io');
+    if (io) {
+      io.to(recipient).emit('new-message', {
+        from: sender,
+        messageId: newMessage._id
+      });
+    }
+    
     res.status(201).json({ message: "Message encrypted and stored" });
   } catch (error) {
     logger('MSG_ERROR', { error: error.message });

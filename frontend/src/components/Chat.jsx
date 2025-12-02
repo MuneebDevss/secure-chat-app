@@ -29,6 +29,47 @@ const Chat = ({ username, onLogout }) => {
     scrollToBottom();
   }, [messages]);
 
+  // --- FETCH MESSAGES ---
+  const fetchMessages = useCallback(async (otherUser) => {
+    if (!sessionKey.current) return;
+    
+    try {
+      const res = await axios.get(`https://localhost:443/api/messages/${username}`);
+      const allMessages = res.data;
+      
+      // Filter messages between current user and target user
+      const relevantMessages = allMessages.filter(
+        m => (m.sender === username && m.recipient === otherUser) ||
+             (m.sender === otherUser && m.recipient === username)
+      );
+      
+      // Decrypt messages
+      const decryptedMessages = [];
+      for (const msg of relevantMessages) {
+        try {
+          const plaintext = await decryptMessage(sessionKey.current, msg.ciphertext, msg.iv);
+          decryptedMessages.push({
+            from: msg.sender,
+            text: plaintext,
+            timestamp: msg.timestamp
+          });
+        } catch (error) {
+          console.error('Failed to decrypt message:', error);
+          // Add the message anyway but mark it as undecryptable
+          decryptedMessages.push({
+            from: msg.sender,
+            text: '[🔒 Message from previous session - requires new handshake]',
+            timestamp: msg.timestamp
+          });
+        }
+      }
+      
+      setMessages(decryptedMessages);
+    } catch (error) {
+      console.error('Failed to fetch messages:', error);
+    }
+  }, [username]);
+
   // --- STEP 2: RESPOND TO HANDSHAKE (BOB) ---
   const handleIncomingHandshake = useCallback(async (data) => {
     setStatus('handshaking');
@@ -43,7 +84,7 @@ const Chat = ({ username, onLogout }) => {
       );
 
       // 2. Verify Signature
-      const isValid = await verifySignature(aliceIdentityKey, signature, ephemeralPublic);
+      const isValid = await verifySignature(aliceIdentityKey, signature, String(ephemeralPublic));
       if (!isValid) {
           alert('⚠️ MITM ATTACK DETECTED! Signature invalid.');
           setStatus('error');
@@ -58,7 +99,7 @@ const Chat = ({ username, onLogout }) => {
       sessionKey.current = await deriveSessionKey(ephemeralKeyPair.current.privateKey, ephemeralPublic);
 
       // 5. Sign Bob's Key
-      const mySignature = await signData(identityPrivateKey.current, myEphemeralPublicRaw);
+      const mySignature = await signData(identityPrivateKey.current, String(myEphemeralPublicRaw));
 
       // 6. Send Response
       socket.emit('signal', {
@@ -91,7 +132,7 @@ const Chat = ({ username, onLogout }) => {
       );
 
       // 2. Verify Signature
-      const isValid = await verifySignature(bobIdentityKey, signature, ephemeralPublic);
+      const isValid = await verifySignature(bobIdentityKey, signature, String(ephemeralPublic));
       if (!isValid) {
           alert('⚠️ MITM ATTACK DETECTED! Signature invalid.');
           setStatus('error');
@@ -127,10 +168,18 @@ const Chat = ({ username, onLogout }) => {
       }
     });
 
+    // SOCKET LISTENER FOR NEW MESSAGES
+    socket.on('new-message', async (data) => {
+      if (sessionKey.current) {
+        await fetchMessages(data.from);
+      }
+    });
+
     return () => {
       socket.off('signal');
+      socket.off('new-message');
     };
-  }, [username, handleIncomingHandshake, handleHandshakeResponse]);
+  }, [username, handleIncomingHandshake, handleHandshakeResponse, fetchMessages]);
 
   // --- STEP 1: START HANDSHAKE (ALICE) ---
   const startSecureChat = async () => {
@@ -139,6 +188,8 @@ const Chat = ({ username, onLogout }) => {
       return;
     }
     
+    // Clear old messages when starting new session
+    setMessages([]);
     setStatus('handshaking');
     
     try {
@@ -147,7 +198,7 @@ const Chat = ({ username, onLogout }) => {
       const myEphemeralPublicRaw = await exportKeyToRaw(ephemeralKeyPair.current.publicKey);
 
       // 2. Sign the Ephemeral Key with Identity Key (Prevents MITM)
-      const signature = await signData(identityPrivateKey.current, myEphemeralPublicRaw);
+      const signature = await signData(identityPrivateKey.current, String(myEphemeralPublicRaw));
 
       // 3. Send Signal
       socket.emit('signal', {
@@ -169,6 +220,11 @@ const Chat = ({ username, onLogout }) => {
   const sendMessage = async () => {
     if (!sessionKey.current) {
       alert("⚠️ No secure connection! Start a handshake first.");
+      return;
+    }
+
+    if (status !== 'connected') {
+      alert("⚠️ Wait for secure connection to complete!");
       return;
     }
 

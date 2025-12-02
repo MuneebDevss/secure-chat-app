@@ -31,12 +31,16 @@ const logEvent = (type, details) => {
 app.set('logger', logEvent);
 
 // ---------------------------------------------------------
+// SOCKET.IO PLACEHOLDER (will be set after https server creation)
+// ---------------------------------------------------------
+let io = null;
+app.set('getIO', () => io);
+
+// ---------------------------------------------------------
 // DATABASE CONNECTION [cite: 107]
 // ---------------------------------------------------------
-mongoose.connect(process.env.MONGO_URI || 'mongodb://localhost:27017/secure-chat', {
-  useNewUrlParser: true,
-  useUnifiedTopology: true
-}).then(() => console.log('MongoDB Connected'))
+mongoose.connect(process.env.MONGO_URI || 'mongodb://localhost:27017/secure-chat')
+  .then(() => console.log('MongoDB Connected'))
   .catch(err => console.error(err));
 
 // ---------------------------------------------------------
@@ -53,13 +57,14 @@ app.use('/api/files', fileRoutes);
 // openssl req -nodes -new -x509 -keyout server.key -out server.cert
 const httpsOptions = {
   key: fs.readFileSync('server.key'),
-  cert: fs.readFileSync('server.cert')
+  cert: fs.readFileSync('server.crt')
 };
 
 const server = https.createServer(httpsOptions, app);
-const io = socketIo(server, {
+io = socketIo(server, {
   cors: { origin: "*" } // Adjust for production
 });
+app.set('io', io);
 
 // ---------------------------------------------------------
 // REAL-TIME SIGNALING (Socket.io)
