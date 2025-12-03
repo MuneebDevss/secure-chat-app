@@ -25,6 +25,8 @@ const Chat = ({ username, onLogout }) => {
   const ephemeralKeyPair = useRef(null);
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
+  
+  const handshakeTimeoutRef = useRef(null);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -106,8 +108,9 @@ const Chat = ({ username, onLogout }) => {
       // 5. Sign Bob's Key
       const mySignature = await signData(identityPrivateKey.current, String(myEphemeralPublicRaw));
 
+      clearTimeout(handshakeTimeoutRef.current);
       setStatus('connected');
-      console.log('Status set to connected', status);
+
       // 6. Send Response
       socket.emit('signal', {
         to: data.from,
@@ -171,6 +174,15 @@ const Chat = ({ username, onLogout }) => {
       } else if (data.type === 'RESPONSE_HANDSHAKE') {
         await handleHandshakeResponse(data);
       }
+      else if (data.type === 'END_SESSION') {
+        alert(`🔒 Secure session with ${data.from} has ended.`);
+        sessionKey.current = null;
+        ephemeralKeyPair.current = null;
+        setMessages([]);
+        setTargetUser('');
+        setStatus('ready');
+      }
+
     });
 
     // SOCKET LISTENER FOR NEW MESSAGES
@@ -236,6 +248,17 @@ const Chat = ({ username, onLogout }) => {
           signature: signature
         }
       });
+      handshakeTimeoutRef.current = setTimeout(() => {
+    setStatus(prev => {
+      if (prev === 'handshaking') {
+        console.warn('Handshake timed out!');
+        setMessages([]);
+        setTargetUser('');
+        return 'idle';
+      }
+      return prev;
+    });
+  }, 7000);
     } catch (error) {
       console.error('Handshake error:', error);
       setStatus('error');
@@ -477,6 +500,11 @@ const Chat = ({ username, onLogout }) => {
                 <button
                   onClick={() => {
                     if (window.confirm('End secure session?')) {
+                      socket.emit('signal', {
+                        to: targetUser,
+                        from: username,
+                        type: 'END_SESSION'
+                      });
                       sessionKey.current = null;
                       ephemeralKeyPair.current = null;
                       setMessages([]);
