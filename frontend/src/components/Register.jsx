@@ -34,7 +34,7 @@ const Register = ({ onRegisterSuccess, onSwitchToLogin }) => {
       const keyPair = await generateIdentityKeyPair();
       
       // 2. Store Private Key Securely (IndexedDB)
-      await storePrivateKey(keyPair.privateKey);
+      await storePrivateKey(username, keyPair.privateKey);
 
       // 3. Export Public Key for Server Registration
       const publicKeyJWK = await exportKeyToJWK(keyPair.publicKey);

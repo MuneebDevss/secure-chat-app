@@ -106,6 +106,8 @@ const Chat = ({ username, onLogout }) => {
       // 5. Sign Bob's Key
       const mySignature = await signData(identityPrivateKey.current, String(myEphemeralPublicRaw));
 
+      setStatus('connected');
+      console.log('Status set to connected', status);
       // 6. Send Response
       socket.emit('signal', {
         to: data.from,
@@ -116,7 +118,6 @@ const Chat = ({ username, onLogout }) => {
           signature: mySignature
         }
       });
-      setStatus('connected');
       setTargetUser(data.from);
     } catch (error) {
       console.error('Handshake response error:', error);
@@ -156,9 +157,8 @@ const Chat = ({ username, onLogout }) => {
   useEffect(() => {
     // Load Identity Key on Mount
     const loadKey = async () => {
-      identityPrivateKey.current = await getPrivateKey();
+      identityPrivateKey.current = await getPrivateKey(username);
       if(identityPrivateKey.current) {
-        setStatus('ready');
         socket.emit('join', username);
       }
     };

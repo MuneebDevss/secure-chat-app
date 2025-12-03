@@ -21,7 +21,7 @@ const Login = ({ onLoginSuccess, onSwitchToRegister }) => {
       });
 
       // 2. Check if private key exists locally
-      const privateKey = await getPrivateKey();
+      const privateKey = await getPrivateKey(username);
       if (!privateKey) {
         setError('Identity key not found. Please register on this device first.');
         setLoading(false);

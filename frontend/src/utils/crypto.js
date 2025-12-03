@@ -31,7 +31,7 @@ export const generateIdentityKeyPair = async () => {
 // --- 2. EPHEMERAL KEY GENERATION (ECDH P-256) ---
 // Generated for every new chat session
 export const generateEphemeralKeyPair = async () => {
-  return await window.crypto.subtle.generateKey(
+  const keyPair = await window.crypto.subtle.generateKey(
     {
       name: "ECDH",
       namedCurve: "P-256",
@@ -39,6 +39,8 @@ export const generateEphemeralKeyPair = async () => {
     true,
     ["deriveKey", "deriveBits"]
   );
+  console.log(keyPair);
+  return keyPair;
 };
 
 // --- 3. DIGITAL SIGNATURE ---

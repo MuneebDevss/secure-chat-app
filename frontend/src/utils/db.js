@@ -16,17 +16,21 @@ export const openDB = () => {
   });
 };
 
-export const storePrivateKey = async (privateKey) => {
+// Add userId parameter
+export const storePrivateKey = async (userId, privateKey) => {
   const db = await openDB();
   const tx = db.transaction(STORE_NAME, "readwrite");
-  tx.objectStore(STORE_NAME).put({ id: "identityKey", key: privateKey });
+  // Use the unique userId as the 'id' (the keyPath)
+  tx.objectStore(STORE_NAME).put({ id: userId, key: privateKey });
 };
 
-export const getPrivateKey = async () => {
+// Add userId parameter
+export const getPrivateKey = async (userId) => {
   const db = await openDB();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE_NAME, "readonly");
-    const req = tx.objectStore(STORE_NAME).get("identityKey");
+    // Use the unique userId to get the correct private key
+    const req = tx.objectStore(STORE_NAME).get(userId);
     req.onsuccess = () => resolve(req.result ? req.result.key : null);
     req.onerror = () => reject("Key not found");
   });
