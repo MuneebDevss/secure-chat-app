@@ -35,15 +35,15 @@ The system follows a **client-server** architecture where the server is intentio
 
 | Technology | Version | Purpose |
 |---|---|---|
-| Node.js | — | Server runtime |
+| Node.js | v18+ | Server runtime |
 | Express | 5.1.0 | HTTP framework |
 | Socket.io | 4.8.1 | WebSocket server for real-time signaling |
 | Mongoose | 9.0.0 | MongoDB ODM |
-| MongoDB | — | Document database for encrypted data |
+| MongoDB | N/A | Document database for encrypted data |
 | bcrypt | 6.0.0 | Password hashing (10 salt rounds) |
 | Multer | 2.0.2 | Multipart file upload middleware |
 | dotenv | 17.2.3 | Environment variable management |
-| HTTPS (Node.js built-in) | — | TLS transport layer |
+| HTTPS (Node.js built-in) | N/A | TLS transport layer |
 
 ### Cryptographic Primitives
 
